@@ -201,6 +201,32 @@ function SyncApp() {
           )}
         </Card>
 
+        <Card className="p-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium mr-1">Mode:</span>
+          <Button
+            size="sm"
+            variant={mode === "add" ? "default" : "outline"}
+            onClick={() => {
+              setMode("add");
+              setFilter("no-image");
+              setSelected(new Set());
+            }}
+          >
+            <ImageOff className="h-4 w-4 mr-1" /> Only add (no image)
+          </Button>
+          <Button
+            size="sm"
+            variant={mode === "replace" ? "default" : "outline"}
+            onClick={() => {
+              setMode("replace");
+              setFilter("has-image");
+              setSelected(new Set());
+            }}
+          >
+            <ImageIcon className="h-4 w-4 mr-1" /> Only replace (has image)
+          </Button>
+        </Card>
+
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant={filter === "all" ? "default" : "outline"} onClick={() => setFilter("all")}>
             <Images className="h-4 w-4 mr-1" /> All
@@ -225,7 +251,7 @@ function SyncApp() {
           </Button>
           <Button size="sm" onClick={confirm} disabled={syncMu.isPending || !selected.size}>
             {syncMu.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-            Confirm &amp; Sync ({selected.size})
+            {mode === "add" ? "Add" : "Replace"} &amp; Sync ({selected.size})
           </Button>
         </div>
 
