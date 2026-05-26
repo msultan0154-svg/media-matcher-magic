@@ -4,10 +4,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  listVariants,
+  listProducts,
   listDriveImages,
-  syncImageToVariant,
-  type VariantRow,
+  syncImagesToProduct,
+  driveImageDataUrl,
+  type ProductRow,
   type DriveImage,
 } from "@/lib/shopify-sync.functions";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Loader2, RefreshCw, ImageIcon, ImageOff, Images } from "lucide-react";
+import { Loader2, RefreshCw, ImageOff, Plus, Replace, X } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/")({
@@ -24,65 +25,90 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Shopify Image Sync" },
-      { name: "description", content: "Match Drive images to Shopify variants by SKU and sync." },
+      { name: "description", content: "Match Drive images to Shopify products by SKU and sync." },
     ],
   }),
 });
 
-type Filter = "all" | "no-image" | "has-image";
+type Mode = "add" | "replace";
 
 interface MatchRow {
-  variant: VariantRow;
-  file: DriveImage | null;
-  skuKey: string | null;
-  position: number;
+  product: ProductRow;
+  files: DriveImage[];
 }
 
-/** Parse `<base>_<pos>.<ext>` — last "_" separates SKU portion from numeric position. */
-function parseFilename(name: string): { base: string; position: number } {
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const us = stem.lastIndexOf("_");
-  if (us > 0) {
-    const tail = stem.slice(us + 1);
-    if (/^\d+$/.test(tail)) return { base: stem.slice(0, us), position: parseInt(tail, 10) };
+/** SKU = portion of filename before the first space. */
+function fileSku(name: string): string {
+  const sp = name.indexOf(" ");
+  return (sp > 0 ? name.slice(0, sp) : name.replace(/\.[^.]+$/, "")).trim();
+}
+
+function matchRows(products: ProductRow[], files: DriveImage[]): MatchRow[] {
+  const byProduct = new Map<string, DriveImage[]>();
+  for (const p of products) byProduct.set(p.productId, []);
+  const lowerSkus = products.map((p) => ({
+    id: p.productId,
+    skus: p.skus.map((s) => s.toLowerCase()),
+  }));
+  for (const f of files) {
+    const sku = fileSku(f.name).toLowerCase();
+    if (!sku) continue;
+    for (const p of lowerSkus) {
+      if (p.skus.includes(sku)) {
+        byProduct.get(p.id)!.push(f);
+      }
+    }
   }
-  return { base: stem, position: 0 };
+  return products.map((p) => ({
+    product: p,
+    files: (byProduct.get(p.productId) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+  }));
 }
 
-function matchRows(variants: VariantRow[], files: DriveImage[]): MatchRow[] {
-  // For each variant, find the lowest-position file whose filename CONTAINS the SKU.
-  const parsed = files.map((f) => ({ file: f, ...parseFilename(f.name) }));
-  return variants.map((v) => {
-    const sku = v.variantSku;
-    const candidates = parsed
-      .filter((p) => sku && p.file.name.toLowerCase().includes(sku.toLowerCase()))
-      .sort((a, b) => a.position - b.position);
-    const best = candidates[0];
-    return {
-      variant: v,
-      file: best?.file ?? null,
-      skuKey: best ? best.base : null,
-      position: best?.position ?? 0,
-    };
+function DriveThumb({ fileId, name, onRemove }: { fileId: string; name: string; onRemove: () => void }) {
+  const fetchThumb = useServerFn(driveImageDataUrl);
+  const q = useQuery({
+    queryKey: ["thumb", fileId],
+    queryFn: () => fetchThumb({ data: { fileId } }),
+    staleTime: 5 * 60 * 1000,
   });
+  return (
+    <div className="relative group">
+      <div className="h-16 w-16 rounded border bg-muted overflow-hidden flex items-center justify-center">
+        {q.isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : q.data ? (
+          <img src={q.data} alt={name} className="h-full w-full object-cover" />
+        ) : (
+          <ImageOff className="h-4 w-4 text-muted-foreground" />
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center shadow opacity-90 hover:opacity-100"
+        title={`Remove ${name}`}
+      >
+        <X className="h-3 w-3" />
+      </button>
+      <div className="text-[10px] text-muted-foreground mt-1 max-w-[64px] truncate" title={name}>
+        {name}
+      </div>
+    </div>
+  );
 }
 
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
-  const [mode, setMode] = useState<"replace" | "add">("add");
+  const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [removed, setRemoved] = useState<Record<string, Set<string>>>({}); // productId -> set of fileIds removed
 
-  const fetchVariants = useServerFn(listVariants);
+  const fetchProducts = useServerFn(listProducts);
   const fetchDrive = useServerFn(listDriveImages);
-  const syncOne = useServerFn(syncImageToVariant);
+  const syncOne = useServerFn(syncImagesToProduct);
 
-  const variantsQ = useQuery({
-    queryKey: ["variants"],
-    queryFn: () => fetchVariants(),
-  });
-
+  const productsQ = useQuery({ queryKey: ["products"], queryFn: () => fetchProducts() });
   const driveQ = useQuery({
     queryKey: ["drive", folderId],
     queryFn: () => fetchDrive({ data: { folderId } }),
@@ -90,31 +116,52 @@ function SyncApp() {
   });
 
   const rows = useMemo(() => {
-    if (!variantsQ.data) return [];
-    return matchRows(variantsQ.data, driveQ.data ?? []);
-  }, [variantsQ.data, driveQ.data]);
+    if (!productsQ.data) return [];
+    return matchRows(productsQ.data, driveQ.data ?? []);
+  }, [productsQ.data, driveQ.data]);
 
-  const visibleRows = useMemo(() => {
-    return rows.filter((r) => {
-      if (filter === "no-image") return !r.variant.imageUrl;
-      if (filter === "has-image") return !!r.variant.imageUrl;
-      return true;
+  const effectiveFiles = (r: MatchRow): DriveImage[] => {
+    const rem = removed[r.product.productId];
+    return rem ? r.files.filter((f) => !rem.has(f.id)) : r.files;
+  };
+
+  const eligible = (r: MatchRow) => effectiveFiles(r).length > 0;
+
+  const removeFile = (productId: string, fileId: string) => {
+    setRemoved((prev) => {
+      const next = { ...prev };
+      const s = new Set(next[productId] ?? []);
+      s.add(fileId);
+      next[productId] = s;
+      return next;
     });
-  }, [rows, filter]);
+  };
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAll = () => {
+    setSelected(new Set(rows.filter(eligible).map((r) => r.product.productId)));
+  };
 
   const syncMu = useMutation({
-    mutationFn: async (matched: MatchRow[]) => {
+    mutationFn: async (chosen: MatchRow[]) => {
       let ok = 0;
       let fail = 0;
-      for (const r of matched) {
-        if (!r.file) continue;
+      for (const r of chosen) {
+        const files = effectiveFiles(r);
+        if (!files.length) continue;
         try {
           await syncOne({
             data: {
-              fileId: r.file.id,
-              fileName: r.file.name,
-              productId: r.variant.productId,
-              variantId: r.variant.variantId,
+              productId: r.product.productId,
+              mode,
+              files: files.map((f) => ({ fileId: f.id, fileName: f.name })),
             },
           });
           ok++;
@@ -126,37 +173,17 @@ function SyncApp() {
       return { ok, fail };
     },
     onSuccess: ({ ok, fail }) => {
-      toast.success(`Synced ${ok}${fail ? `, ${fail} failed` : ""}`);
+      toast.success(`Synced ${ok} product${ok === 1 ? "" : "s"}${fail ? `, ${fail} failed` : ""}`);
       setSelected(new Set());
-      variantsQ.refetch();
+      productsQ.refetch();
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const eligible = (r: MatchRow) =>
-    !!r.file && (mode === "add" ? !r.variant.imageUrl : !!r.variant.imageUrl);
-
-  const selectAllVisible = () => {
-    const ids = visibleRows.filter(eligible).map((r) => r.variant.variantId);
-    setSelected(new Set(ids));
-  };
-
   const confirm = () => {
-    const chosen = visibleRows.filter((r) => selected.has(r.variant.variantId) && eligible(r));
+    const chosen = rows.filter((r) => selected.has(r.product.productId) && eligible(r));
     if (!chosen.length) {
-      toast.error(
-        mode === "add"
-          ? "Nothing selected (only variants without an image can be added)"
-          : "Nothing selected (only variants with an existing image can be replaced)"
-      );
+      toast.error("Nothing selected");
       return;
     }
     syncMu.mutate(chosen);
@@ -169,8 +196,7 @@ function SyncApp() {
         <header>
           <h1 className="text-2xl font-semibold">Shopify Image Sync</h1>
           <p className="text-sm text-muted-foreground">
-            Match Drive images to variants by SKU substring. Filename format: <code>...SKU..._N.ext</code> — last
-            <code>_N</code> sets order.
+            Filename SKU = text before the first space. All matching images are listed per product.
           </p>
         </header>
 
@@ -183,20 +209,17 @@ function SyncApp() {
               value={folderId}
               onChange={(e) => setFolderId(e.target.value)}
             />
-            <Button
-              onClick={() => driveQ.refetch()}
-              disabled={!folderId || driveQ.isFetching}
-            >
+            <Button onClick={() => driveQ.refetch()} disabled={!folderId || driveQ.isFetching}>
               {driveQ.isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               <span className="ml-2">Scan</span>
             </Button>
-            <Button variant="outline" onClick={() => variantsQ.refetch()} disabled={variantsQ.isFetching}>
-              Reload variants
+            <Button variant="outline" onClick={() => productsQ.refetch()} disabled={productsQ.isFetching}>
+              Reload products
             </Button>
           </div>
           {driveQ.data && (
             <p className="text-xs text-muted-foreground">
-              {driveQ.data.length} images in folder · {variantsQ.data?.length ?? 0} variants
+              {driveQ.data.length} images · {productsQ.data?.length ?? 0} products
             </p>
           )}
         </Card>
@@ -206,54 +229,26 @@ function SyncApp() {
           <Button
             size="sm"
             variant={mode === "add" ? "default" : "outline"}
-            onClick={() => {
-              setMode("add");
-              setFilter("no-image");
-              setSelected(new Set());
-            }}
+            onClick={() => setMode("add")}
           >
-            <ImageOff className="h-4 w-4 mr-1" /> Only add (no image)
+            <Plus className="h-4 w-4 mr-1" /> Add images only
           </Button>
           <Button
             size="sm"
             variant={mode === "replace" ? "default" : "outline"}
-            onClick={() => {
-              setMode("replace");
-              setFilter("has-image");
-              setSelected(new Set());
-            }}
+            onClick={() => setMode("replace")}
           >
-            <ImageIcon className="h-4 w-4 mr-1" /> Only replace (has image)
-          </Button>
-        </Card>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant={filter === "all" ? "default" : "outline"} onClick={() => setFilter("all")}>
-            <Images className="h-4 w-4 mr-1" /> All
-          </Button>
-          <Button
-            size="sm"
-            variant={filter === "no-image" ? "default" : "outline"}
-            onClick={() => setFilter("no-image")}
-          >
-            <ImageOff className="h-4 w-4 mr-1" /> No image
-          </Button>
-          <Button
-            size="sm"
-            variant={filter === "has-image" ? "default" : "outline"}
-            onClick={() => setFilter("has-image")}
-          >
-            <ImageIcon className="h-4 w-4 mr-1" /> Has image
+            <Replace className="h-4 w-4 mr-1" /> Replace images
           </Button>
           <div className="flex-1" />
-          <Button size="sm" variant="outline" onClick={selectAllVisible} disabled={!visibleRows.length}>
-            Select all visible
+          <Button size="sm" variant="outline" onClick={selectAll} disabled={!rows.some(eligible)}>
+            Select all matched
           </Button>
           <Button size="sm" onClick={confirm} disabled={syncMu.isPending || !selected.size}>
             {syncMu.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-            {mode === "add" ? "Add" : "Replace"} &amp; Sync ({selected.size})
+            {mode === "add" ? "Add" : "Replace"} ({selected.size})
           </Button>
-        </div>
+        </Card>
 
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
@@ -262,42 +257,41 @@ function SyncApp() {
                 <tr className="text-left">
                   <th className="p-2 w-8"></th>
                   <th className="p-2 w-16">Now</th>
-                  <th className="p-2">Variant SKU</th>
                   <th className="p-2">Product</th>
-                  <th className="p-2">Matched file</th>
-                  <th className="p-2 w-16">Pos</th>
+                  <th className="p-2">Matched images</th>
                 </tr>
               </thead>
               <tbody>
-                {variantsQ.isLoading ? (
+                {productsQ.isLoading ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-muted-foreground">
-                      <Loader2 className="h-5 w-5 animate-spin inline" /> Loading variants…
+                    <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin inline" /> Loading products…
                     </td>
                   </tr>
-                ) : visibleRows.length === 0 ? (
+                ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-muted-foreground">
-                      No rows
+                    <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                      No products
                     </td>
                   </tr>
                 ) : (
-                  visibleRows.map((r) => {
-                    const id = r.variant.variantId;
+                  rows.map((r) => {
+                    const id = r.product.productId;
+                    const files = effectiveFiles(r);
                     const disabled = !eligible(r);
                     return (
-                      <tr key={id} className="border-t">
-                        <td className="p-2">
+                      <tr key={id} className="border-t align-top">
+                        <td className="p-2 pt-4">
                           <Checkbox
                             checked={selected.has(id)}
                             onCheckedChange={() => toggle(id)}
                             disabled={disabled}
                           />
                         </td>
-                        <td className="p-2">
-                          {r.variant.imageUrl ? (
+                        <td className="p-2 pt-3">
+                          {r.product.firstImageUrl ? (
                             <img
-                              src={r.variant.imageUrl}
+                              src={r.product.firstImageUrl}
                               alt=""
                               className="h-10 w-10 object-cover rounded"
                             />
@@ -307,19 +301,28 @@ function SyncApp() {
                             </div>
                           )}
                         </td>
-                        <td className="p-2 font-mono text-xs">{r.variant.variantSku}</td>
-                        <td className="p-2">
-                          <div className="truncate max-w-xs">{r.variant.productTitle}</div>
-                          <div className="text-xs text-muted-foreground">{r.variant.variantTitle}</div>
+                        <td className="p-2 pt-3">
+                          <div className="font-medium truncate max-w-xs">{r.product.productTitle}</div>
+                          <div className="text-xs text-muted-foreground font-mono truncate max-w-xs">
+                            {r.product.skus.join(", ")}
+                          </div>
                         </td>
-                        <td className="p-2">
-                          {r.file ? (
-                            <span className="font-mono text-xs">{r.file.name}</span>
-                          ) : (
+                        <td className="p-2 pt-3">
+                          {files.length === 0 ? (
                             <Badge variant="outline">No match</Badge>
+                          ) : (
+                            <div className="flex flex-wrap gap-3">
+                              {files.map((f) => (
+                                <DriveThumb
+                                  key={f.id}
+                                  fileId={f.id}
+                                  name={f.name}
+                                  onRemove={() => removeFile(id, f.id)}
+                                />
+                              ))}
+                            </div>
                           )}
                         </td>
-                        <td className="p-2">{r.file ? r.position : ""}</td>
                       </tr>
                     );
                   })
