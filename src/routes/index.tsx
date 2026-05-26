@@ -71,6 +71,7 @@ function matchRows(variants: VariantRow[], files: DriveImage[]): MatchRow[] {
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [mode, setMode] = useState<"replace" | "add">("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const fetchVariants = useServerFn(listVariants);
