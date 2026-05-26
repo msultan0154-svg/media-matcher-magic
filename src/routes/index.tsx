@@ -71,6 +71,7 @@ function matchRows(variants: VariantRow[], files: DriveImage[]): MatchRow[] {
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [mode, setMode] = useState<"replace" | "add">("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const fetchVariants = useServerFn(listVariants);
@@ -140,15 +141,22 @@ function SyncApp() {
       return next;
     });
 
+  const eligible = (r: MatchRow) =>
+    !!r.file && (mode === "add" ? !r.variant.imageUrl : !!r.variant.imageUrl);
+
   const selectAllVisible = () => {
-    const ids = visibleRows.filter((r) => r.file).map((r) => r.variant.variantId);
+    const ids = visibleRows.filter(eligible).map((r) => r.variant.variantId);
     setSelected(new Set(ids));
   };
 
   const confirm = () => {
-    const chosen = visibleRows.filter((r) => selected.has(r.variant.variantId) && r.file);
+    const chosen = visibleRows.filter((r) => selected.has(r.variant.variantId) && eligible(r));
     if (!chosen.length) {
-      toast.error("Nothing selected");
+      toast.error(
+        mode === "add"
+          ? "Nothing selected (only variants without an image can be added)"
+          : "Nothing selected (only variants with an existing image can be replaced)"
+      );
       return;
     }
     syncMu.mutate(chosen);
@@ -193,6 +201,32 @@ function SyncApp() {
           )}
         </Card>
 
+        <Card className="p-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium mr-1">Mode:</span>
+          <Button
+            size="sm"
+            variant={mode === "add" ? "default" : "outline"}
+            onClick={() => {
+              setMode("add");
+              setFilter("no-image");
+              setSelected(new Set());
+            }}
+          >
+            <ImageOff className="h-4 w-4 mr-1" /> Only add (no image)
+          </Button>
+          <Button
+            size="sm"
+            variant={mode === "replace" ? "default" : "outline"}
+            onClick={() => {
+              setMode("replace");
+              setFilter("has-image");
+              setSelected(new Set());
+            }}
+          >
+            <ImageIcon className="h-4 w-4 mr-1" /> Only replace (has image)
+          </Button>
+        </Card>
+
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant={filter === "all" ? "default" : "outline"} onClick={() => setFilter("all")}>
             <Images className="h-4 w-4 mr-1" /> All
@@ -217,7 +251,7 @@ function SyncApp() {
           </Button>
           <Button size="sm" onClick={confirm} disabled={syncMu.isPending || !selected.size}>
             {syncMu.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-            Confirm &amp; Sync ({selected.size})
+            {mode === "add" ? "Add" : "Replace"} &amp; Sync ({selected.size})
           </Button>
         </div>
 
@@ -250,7 +284,7 @@ function SyncApp() {
                 ) : (
                   visibleRows.map((r) => {
                     const id = r.variant.variantId;
-                    const disabled = !r.file;
+                    const disabled = !eligible(r);
                     return (
                       <tr key={id} className="border-t">
                         <td className="p-2">
