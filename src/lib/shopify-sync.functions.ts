@@ -2,13 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 const SHOPIFY_API_VERSION = "2025-07";
+const SHOPIFY_DOMAIN = "smart-image-capture.myshopify.com";
 
 function shopifyAdmin() {
-  const domain = process.env.SHOPIFY_STORE_PERMANENT_DOMAIN || process.env.SHOPIFY_SHOP_DOMAIN;
   const token = process.env.SHOPIFY_ACCESS_TOKEN;
-  if (!domain) throw new Error("Missing SHOPIFY_STORE_PERMANENT_DOMAIN");
   if (!token) throw new Error("Missing SHOPIFY_ACCESS_TOKEN");
-  return { domain, token };
+  return { domain: SHOPIFY_DOMAIN, token };
 }
 
 async function shopifyGql<T = unknown>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
