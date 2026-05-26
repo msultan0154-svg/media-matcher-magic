@@ -284,7 +284,7 @@ function SyncApp() {
                 ) : (
                   visibleRows.map((r) => {
                     const id = r.variant.variantId;
-                    const disabled = !r.file;
+                    const disabled = !eligible(r);
                     return (
                       <tr key={id} className="border-t">
                         <td className="p-2">
