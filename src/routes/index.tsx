@@ -141,15 +141,22 @@ function SyncApp() {
       return next;
     });
 
+  const eligible = (r: MatchRow) =>
+    !!r.file && (mode === "add" ? !r.variant.imageUrl : !!r.variant.imageUrl);
+
   const selectAllVisible = () => {
-    const ids = visibleRows.filter((r) => r.file).map((r) => r.variant.variantId);
+    const ids = visibleRows.filter(eligible).map((r) => r.variant.variantId);
     setSelected(new Set(ids));
   };
 
   const confirm = () => {
-    const chosen = visibleRows.filter((r) => selected.has(r.variant.variantId) && r.file);
+    const chosen = visibleRows.filter((r) => selected.has(r.variant.variantId) && eligible(r));
     if (!chosen.length) {
-      toast.error("Nothing selected");
+      toast.error(
+        mode === "add"
+          ? "Nothing selected (only variants without an image can be added)"
+          : "Nothing selected (only variants with an existing image can be replaced)"
+      );
       return;
     }
     syncMu.mutate(chosen);
