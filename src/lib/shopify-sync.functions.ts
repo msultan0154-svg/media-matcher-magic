@@ -27,17 +27,16 @@ async function shopifyGql<T = unknown>(query: string, variables: Record<string, 
   return json.data as T;
 }
 
-export interface VariantRow {
-  variantId: string;
-  variantSku: string;
-  variantTitle: string;
+export interface ProductRow {
   productId: string;
   productTitle: string;
-  imageUrl: string | null;
+  skus: string[];
+  imageCount: number;
+  firstImageUrl: string | null;
 }
 
-export const listVariants = createServerFn({ method: "GET" }).handler(async (): Promise<VariantRow[]> => {
-  const rows: VariantRow[] = [];
+export const listProducts = createServerFn({ method: "GET" }).handler(async (): Promise<ProductRow[]> => {
+  const rows: ProductRow[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 20; page++) {
     const data: any = await shopifyGql(
@@ -46,10 +45,9 @@ export const listVariants = createServerFn({ method: "GET" }).handler(async (): 
           pageInfo { hasNextPage endCursor }
           edges { node {
             id title
-            variants(first: 100) { edges { node {
-              id sku title
-              image { url }
-            } } }
+            images(first: 1) { edges { node { url } } }
+            media(first: 1) { edges { node { id } } }
+            variants(first: 100) { edges { node { sku } } }
           } }
         }
       }`,
@@ -57,18 +55,16 @@ export const listVariants = createServerFn({ method: "GET" }).handler(async (): 
     );
     for (const pe of data.products.edges) {
       const p = pe.node;
-      for (const ve of p.variants.edges) {
-        const v = ve.node;
-        if (!v.sku) continue;
-        rows.push({
-          variantId: v.id,
-          variantSku: v.sku,
-          variantTitle: v.title,
-          productId: p.id,
-          productTitle: p.title,
-          imageUrl: v.image?.url ?? null,
-        });
-      }
+      const skus: string[] = p.variants.edges
+        .map((e: any) => e.node.sku)
+        .filter((s: string | null) => !!s);
+      rows.push({
+        productId: p.id,
+        productTitle: p.title,
+        skus,
+        imageCount: p.media.edges.length,
+        firstImageUrl: p.images.edges[0]?.node.url ?? null,
+      });
     }
     if (!data.products.pageInfo.hasNextPage) break;
     cursor = data.products.pageInfo.endCursor;
@@ -79,6 +75,7 @@ export const listVariants = createServerFn({ method: "GET" }).handler(async (): 
 export interface DriveImage {
   id: string;
   name: string;
+  thumbnailLink?: string;
 }
 
 async function driveFetch(path: string): Promise<Response> {
@@ -100,7 +97,7 @@ export const listDriveImages = createServerFn({ method: "POST" })
     let pageToken: string | undefined;
     for (let i = 0; i < 20; i++) {
       const q = encodeURIComponent(`'${data.folderId}' in parents and mimeType contains 'image/' and trashed=false`);
-      const url = `/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name)&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ""}`;
+      const url = `/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,thumbnailLink)&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ""}`;
       const res = await driveFetch(url);
       if (!res.ok) throw new Error(`Drive list ${res.status}: ${(await res.text()).slice(0, 300)}`);
       const json = (await res.json()) as { files?: DriveImage[]; nextPageToken?: string };
@@ -111,120 +108,122 @@ export const listDriveImages = createServerFn({ method: "POST" })
     return images;
   });
 
-/** Download Drive file, stage upload to Shopify, attach to product, detach existing variant media, append to variant. */
-export const syncImageToVariant = createServerFn({ method: "POST" })
-  .inputValidator((d: { fileId: string; fileName: string; productId: string; variantId: string }) =>
-    z
-      .object({
-        fileId: z.string().min(1),
-        fileName: z.string().min(1),
-        productId: z.string().min(1),
-        variantId: z.string().min(1),
-      })
-      .parse(d)
+/** Return a base64 data URL for a Drive thumbnail (proxied since thumbnailLink requires auth). */
+export const driveImageDataUrl = createServerFn({ method: "POST" })
+  .inputValidator((d: { fileId: string }) => z.object({ fileId: z.string().min(1) }).parse(d))
+  .handler(async ({ data }): Promise<string> => {
+    const res = await driveFetch(`/drive/v3/files/${data.fileId}?alt=media`);
+    if (!res.ok) throw new Error(`Drive thumb ${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const mime = res.headers.get("content-type") ?? "image/jpeg";
+    // Convert without exceeding stack
+    let bin = "";
+    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+    const b64 = btoa(bin);
+    return `data:${mime};base64,${b64}`;
+  });
+
+async function uploadOneToProduct(
+  productId: string,
+  file: { fileId: string; fileName: string }
+): Promise<string> {
+  const dlRes = await driveFetch(`/drive/v3/files/${file.fileId}?alt=media`);
+  if (!dlRes.ok) throw new Error(`Drive download ${dlRes.status}`);
+  const buf = new Uint8Array(await dlRes.arrayBuffer());
+  const mime = dlRes.headers.get("content-type") ?? "image/jpeg";
+
+  const staged: any = await shopifyGql(
+    `mutation($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets { url resourceUrl parameters { name value } }
+        userErrors { field message }
+      }
+    }`,
+    {
+      input: [
+        {
+          filename: file.fileName,
+          mimeType: mime,
+          httpMethod: "POST",
+          resource: "IMAGE",
+          fileSize: String(buf.byteLength),
+        },
+      ],
+    }
+  );
+  const errs1 = staged.stagedUploadsCreate.userErrors;
+  if (errs1.length) throw new Error(`stagedUploadsCreate: ${JSON.stringify(errs1)}`);
+  const target = staged.stagedUploadsCreate.stagedTargets[0];
+
+  const fd = new FormData();
+  for (const p of target.parameters) fd.append(p.name, p.value);
+  fd.append("file", new Blob([buf], { type: mime }), file.fileName);
+  const upRes = await fetch(target.url, { method: "POST", body: fd });
+  if (!upRes.ok && upRes.status !== 201 && upRes.status !== 204) {
+    throw new Error(`Staged upload ${upRes.status}: ${(await upRes.text()).slice(0, 300)}`);
+  }
+
+  const created: any = await shopifyGql(
+    `mutation($productId: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $productId, media: $media) {
+        media { ... on MediaImage { id status } }
+        mediaUserErrors { field message }
+      }
+    }`,
+    {
+      productId,
+      media: [{ originalSource: target.resourceUrl, mediaContentType: "IMAGE", alt: file.fileName }],
+    }
+  );
+  const errs2 = created.productCreateMedia.mediaUserErrors;
+  if (errs2.length) throw new Error(`productCreateMedia: ${JSON.stringify(errs2)}`);
+  return created.productCreateMedia.media[0].id;
+}
+
+async function deleteAllProductMedia(productId: string) {
+  const data: any = await shopifyGql(
+    `query($id: ID!) { product(id: $id) { media(first: 250) { edges { node { id } } } } }`,
+    { id: productId }
+  );
+  const ids: string[] = (data.product?.media?.edges ?? []).map((e: any) => e.node.id);
+  if (!ids.length) return;
+  const res: any = await shopifyGql(
+    `mutation($productId: ID!, $mediaIds: [ID!]!) {
+      productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+        deletedMediaIds
+        mediaUserErrors { field message }
+      }
+    }`,
+    { productId, mediaIds: ids }
+  );
+  const errs = res.productDeleteMedia.mediaUserErrors;
+  if (errs.length) throw new Error(`productDeleteMedia: ${JSON.stringify(errs)}`);
+}
+
+export const syncImagesToProduct = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: {
+      productId: string;
+      mode: "add" | "replace";
+      files: { fileId: string; fileName: string }[];
+    }) =>
+      z
+        .object({
+          productId: z.string().min(1),
+          mode: z.enum(["add", "replace"]),
+          files: z
+            .array(z.object({ fileId: z.string().min(1), fileName: z.string().min(1) }))
+            .min(1),
+        })
+        .parse(d)
   )
   .handler(async ({ data }) => {
-    // 1) Download from Drive
-    const dlRes = await driveFetch(`/drive/v3/files/${data.fileId}?alt=media`);
-    if (!dlRes.ok) throw new Error(`Drive download ${dlRes.status}`);
-    const buf = new Uint8Array(await dlRes.arrayBuffer());
-    const mime = dlRes.headers.get("content-type") ?? "image/jpeg";
-
-    // 2) Staged upload create
-    const staged: any = await shopifyGql(
-      `mutation($input: [StagedUploadInput!]!) {
-        stagedUploadsCreate(input: $input) {
-          stagedTargets { url resourceUrl parameters { name value } }
-          userErrors { field message }
-        }
-      }`,
-      {
-        input: [
-          {
-            filename: data.fileName,
-            mimeType: mime,
-            httpMethod: "POST",
-            resource: "IMAGE",
-            fileSize: String(buf.byteLength),
-          },
-        ],
-      }
-    );
-    const errs1 = staged.stagedUploadsCreate.userErrors;
-    if (errs1.length) throw new Error(`stagedUploadsCreate: ${JSON.stringify(errs1)}`);
-    const target = staged.stagedUploadsCreate.stagedTargets[0];
-
-    // 3) POST file to staged URL (multipart)
-    const fd = new FormData();
-    for (const p of target.parameters) fd.append(p.name, p.value);
-    fd.append("file", new Blob([buf], { type: mime }), data.fileName);
-    const upRes = await fetch(target.url, { method: "POST", body: fd });
-    if (!upRes.ok && upRes.status !== 201 && upRes.status !== 204) {
-      throw new Error(`Staged upload ${upRes.status}: ${(await upRes.text()).slice(0, 300)}`);
+    if (data.mode === "replace") {
+      await deleteAllProductMedia(data.productId);
     }
-
-    // 4) Attach to product as media
-    const created: any = await shopifyGql(
-      `mutation($productId: ID!, $media: [CreateMediaInput!]!) {
-        productCreateMedia(productId: $productId, media: $media) {
-          media { ... on MediaImage { id status } }
-          mediaUserErrors { field message }
-        }
-      }`,
-      {
-        productId: data.productId,
-        media: [{ originalSource: target.resourceUrl, mediaContentType: "IMAGE", alt: data.fileName }],
-      }
-    );
-    const errs2 = created.productCreateMedia.mediaUserErrors;
-    if (errs2.length) throw new Error(`productCreateMedia: ${JSON.stringify(errs2)}`);
-    const mediaId: string = created.productCreateMedia.media[0].id;
-
-    // 5) Poll until media is READY (max ~30s)
-    for (let i = 0; i < 30; i++) {
-      const status: any = await shopifyGql(
-        `query($id: ID!) { node(id: $id) { ... on MediaImage { id status } } }`,
-        { id: mediaId }
-      );
-      if (status.node?.status === "READY") break;
-      if (status.node?.status === "FAILED") throw new Error("Media processing failed");
-      await new Promise((r) => setTimeout(r, 1000));
+    const mediaIds: string[] = [];
+    for (const f of data.files) {
+      mediaIds.push(await uploadOneToProduct(data.productId, f));
     }
-
-    // 6) Detach existing variant media
-    const variantNode: any = await shopifyGql(
-      `query($id: ID!) { productVariant(id: $id) { id media(first: 50) { edges { node { id } } } } }`,
-      { id: data.variantId }
-    );
-    const existing: string[] = (variantNode.productVariant?.media?.edges ?? []).map((e: any) => e.node.id);
-    if (existing.length) {
-      await shopifyGql(
-        `mutation($productId: ID!, $variantMedia: [ProductVariantDetachMediaInput!]!) {
-          productVariantDetachMedia(productId: $productId, variantMedia: $variantMedia) {
-            userErrors { field message }
-          }
-        }`,
-        {
-          productId: data.productId,
-          variantMedia: [{ variantId: data.variantId, mediaIds: existing }],
-        }
-      );
-    }
-
-    // 7) Append the new media to the variant
-    const append: any = await shopifyGql(
-      `mutation($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
-        productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
-          userErrors { field message }
-        }
-      }`,
-      {
-        productId: data.productId,
-        variantMedia: [{ variantId: data.variantId, mediaIds: [mediaId] }],
-      }
-    );
-    const errs3 = append.productVariantAppendMedia.userErrors;
-    if (errs3.length) throw new Error(`productVariantAppendMedia: ${JSON.stringify(errs3)}`);
-
-    return { ok: true, mediaId };
+    return { ok: true, mediaIds };
   });
