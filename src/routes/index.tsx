@@ -118,8 +118,15 @@ function SyncApp() {
 
   const rows = useMemo(() => {
     if (!productsQ.data) return [];
-    return matchRows(productsQ.data, driveQ.data ?? []);
-  }, [productsQ.data, driveQ.data]);
+    const all = matchRows(productsQ.data, driveQ.data ?? []);
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (r) =>
+        r.product.productTitle.toLowerCase().includes(q) ||
+        r.product.skus.some((s) => s.toLowerCase().includes(q))
+    );
+  }, [productsQ.data, driveQ.data, search]);
 
   const effectiveFiles = (r: MatchRow): DriveImage[] => {
     const rem = removed[r.product.productId];
@@ -221,6 +228,25 @@ function SyncApp() {
           {driveQ.data && (
             <p className="text-xs text-muted-foreground">
               {driveQ.data.length} images · {productsQ.data?.length ?? 0} products
+            </p>
+          )}
+        </Card>
+
+        <Card className="p-4 space-y-3">
+          <Label htmlFor="search">Search products</Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              id="search"
+              placeholder="Type product title or SKU..."
+              className="pl-9"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          {search && (
+            <p className="text-xs text-muted-foreground">
+              Showing {rows.length} of {productsQ.data?.length ?? 0} products
             </p>
           )}
         </Card>
