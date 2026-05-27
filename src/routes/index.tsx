@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Loader2, RefreshCw, ImageOff, Plus, Replace, X } from "lucide-react";
+import { Loader2, RefreshCw, ImageOff, Plus, Replace, X, Search } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/")({
