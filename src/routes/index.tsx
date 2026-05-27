@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Loader2, RefreshCw, ImageOff, Plus, Replace, X } from "lucide-react";
+import { Loader2, RefreshCw, ImageOff, Plus, Replace, X, Search } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/")({
@@ -100,6 +100,7 @@ function DriveThumb({ fileId, name, onRemove }: { fileId: string; name: string; 
 
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
+  const [search, setSearch] = useState("");
   const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [removed, setRemoved] = useState<Record<string, Set<string>>>({}); // productId -> set of fileIds removed
@@ -117,8 +118,15 @@ function SyncApp() {
 
   const rows = useMemo(() => {
     if (!productsQ.data) return [];
-    return matchRows(productsQ.data, driveQ.data ?? []);
-  }, [productsQ.data, driveQ.data]);
+    const all = matchRows(productsQ.data, driveQ.data ?? []);
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (r) =>
+        r.product.productTitle.toLowerCase().includes(q) ||
+        r.product.skus.some((s) => s.toLowerCase().includes(q))
+    );
+  }, [productsQ.data, driveQ.data, search]);
 
   const effectiveFiles = (r: MatchRow): DriveImage[] => {
     const rem = removed[r.product.productId];
@@ -220,6 +228,25 @@ function SyncApp() {
           {driveQ.data && (
             <p className="text-xs text-muted-foreground">
               {driveQ.data.length} images · {productsQ.data?.length ?? 0} products
+            </p>
+          )}
+        </Card>
+
+        <Card className="p-4 space-y-3">
+          <Label htmlFor="search">Search products</Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              id="search"
+              placeholder="Type product title or SKU..."
+              className="pl-9"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          {search && (
+            <p className="text-xs text-muted-foreground">
+              Showing {rows.length} of {productsQ.data?.length ?? 0} products
             </p>
           )}
         </Card>
