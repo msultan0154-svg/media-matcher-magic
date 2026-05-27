@@ -100,6 +100,7 @@ function DriveThumb({ fileId, name, onRemove }: { fileId: string; name: string; 
 
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
+  const [search, setSearch] = useState("");
   const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [removed, setRemoved] = useState<Record<string, Set<string>>>({}); // productId -> set of fileIds removed
