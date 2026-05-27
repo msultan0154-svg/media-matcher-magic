@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Loader2, RefreshCw, ImageOff, Plus, Replace, X, Search } from "lucide-react";
+import { Loader2, RefreshCw, ImageOff, Plus, Replace, X, Search, Package, Layers, Image } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/")({
@@ -202,11 +202,58 @@ function SyncApp() {
       <Toaster position="top-right" />
       <div className="mx-auto max-w-6xl p-6 space-y-6">
         <header>
-          <h1 className="text-2xl font-semibold">Shopify Image Sync</h1>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             Filename SKU = text before the first space. All matching images are listed per product.
           </p>
         </header>
+
+        {productsQ.data && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card className="p-4 flex items-center gap-4">
+              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Package className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold">{productsQ.data.length}</div>
+                <div className="text-xs text-muted-foreground">Total Products</div>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-4">
+              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Layers className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold">
+                  {productsQ.data.reduce((sum, p) => sum + p.skus.length, 0)}
+                </div>
+                <div className="text-xs text-muted-foreground">Total Variants</div>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-4">
+              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Image className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold">
+                  {productsQ.data.reduce((sum, p) => sum + p.imageCount, 0)}
+                </div>
+                <div className="text-xs text-muted-foreground">Total Images</div>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-4">
+              <div className="h-10 w-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                <ImageOff className="h-5 w-5 text-destructive" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold">
+                  {productsQ.data.filter((p) => p.imageCount === 0).length}
+                </div>
+                <div className="text-xs text-muted-foreground">Products without images</div>
+              </div>
+            </Card>
+          </div>
+        )}
 
         <Card className="p-4 space-y-3">
           <Label htmlFor="folder">Google Drive folder ID</Label>
