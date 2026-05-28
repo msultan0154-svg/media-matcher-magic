@@ -98,12 +98,20 @@ function DriveThumb({ fileId, name, onRemove }: { fileId: string; name: string; 
   );
 }
 
+const DEMO_LIMIT = 5;
+const DEMO_KEY = "demo_synced_count";
+
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
   const [search, setSearch] = useState("");
   const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [removed, setRemoved] = useState<Record<string, Set<string>>>({}); // productId -> set of fileIds removed
+  const [demoUsed, setDemoUsed] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return Number(localStorage.getItem(DEMO_KEY) ?? 0);
+  });
+  const demoRemaining = Math.max(0, DEMO_LIMIT - demoUsed);
 
   const fetchProducts = useServerFn(listProducts);
   const fetchDrive = useServerFn(listDriveImages);
@@ -161,9 +169,15 @@ function SyncApp() {
     mutationFn: async (chosen: MatchRow[]) => {
       let ok = 0;
       let fail = 0;
+      let used = demoUsed;
+      let blocked = 0;
       for (const r of chosen) {
         const files = effectiveFiles(r);
         if (!files.length) continue;
+        if (used >= DEMO_LIMIT) {
+          blocked++;
+          continue;
+        }
         try {
           await syncOne({
             data: {
@@ -173,15 +187,20 @@ function SyncApp() {
             },
           });
           ok++;
+          used++;
+          localStorage.setItem(DEMO_KEY, String(used));
+          setDemoUsed(used);
         } catch (e) {
           console.error(e);
           fail++;
         }
       }
-      return { ok, fail };
+      return { ok, fail, blocked };
     },
-    onSuccess: ({ ok, fail }) => {
-      toast.success(`Synced ${ok} product${ok === 1 ? "" : "s"}${fail ? `, ${fail} failed` : ""}`);
+    onSuccess: ({ ok, fail, blocked }) => {
+      toast.success(
+        `Synced ${ok} product${ok === 1 ? "" : "s"}${fail ? `, ${fail} failed` : ""}${blocked ? `, ${blocked} skipped (demo limit)` : ""}`
+      );
       setSelected(new Set());
       productsQ.refetch();
     },
@@ -194,6 +213,13 @@ function SyncApp() {
       toast.error("Nothing selected");
       return;
     }
+    if (demoRemaining === 0) {
+      toast.error("Demo limit reached. Upgrade to sync more products.");
+      return;
+    }
+    if (chosen.length > demoRemaining) {
+      toast.warning(`Demo allows ${demoRemaining} more sync${demoRemaining === 1 ? "" : "s"}. Extra products will be skipped.`);
+    }
     syncMu.mutate(chosen);
   };
 
@@ -201,11 +227,21 @@ function SyncApp() {
     <div className="min-h-screen bg-background">
       <Toaster position="top-right" />
       <div className="mx-auto max-w-6xl p-6 space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Filename SKU = text before the first space. All matching images are listed per product.
-          </p>
+        <header className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold">Dashboard</h1>
+            <p className="text-sm text-muted-foreground">
+              Filename SKU = text before the first space. All matching images are listed per product.
+            </p>
+          </div>
+          <div className={`rounded-lg border px-4 py-2 text-sm ${demoRemaining === 0 ? "border-destructive bg-destructive/10 text-destructive" : "bg-muted"}`}>
+            <div className="font-medium">Demo version</div>
+            <div className="text-xs">
+              {demoRemaining > 0
+                ? `${demoRemaining} of ${DEMO_LIMIT} product syncs remaining`
+                : "Limit reached — upgrade to continue"}
+            </div>
+          </div>
         </header>
 
         {productsQ.data && (
