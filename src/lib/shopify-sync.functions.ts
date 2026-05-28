@@ -1,13 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-const SHOPIFY_API_VERSION = "2025-07";
-const SHOPIFY_DOMAIN = "smart-image-capture.myshopify.com";
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-07";
 
 function shopifyAdmin() {
+  const domain = process.env.SHOPIFY_STORE_DOMAIN;
   const token = process.env.SHOPIFY_ACCESS_TOKEN;
+  if (!domain) throw new Error("Missing SHOPIFY_STORE_DOMAIN (e.g. your-store.myshopify.com)");
   if (!token) throw new Error("Missing SHOPIFY_ACCESS_TOKEN");
-  return { domain: SHOPIFY_DOMAIN, token };
+  return { domain, token };
 }
 
 async function shopifyGql<T = unknown>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
