@@ -169,9 +169,15 @@ function SyncApp() {
     mutationFn: async (chosen: MatchRow[]) => {
       let ok = 0;
       let fail = 0;
+      let used = demoUsed;
+      let blocked = 0;
       for (const r of chosen) {
         const files = effectiveFiles(r);
         if (!files.length) continue;
+        if (used >= DEMO_LIMIT) {
+          blocked++;
+          continue;
+        }
         try {
           await syncOne({
             data: {
@@ -181,15 +187,20 @@ function SyncApp() {
             },
           });
           ok++;
+          used++;
+          localStorage.setItem(DEMO_KEY, String(used));
+          setDemoUsed(used);
         } catch (e) {
           console.error(e);
           fail++;
         }
       }
-      return { ok, fail };
+      return { ok, fail, blocked };
     },
-    onSuccess: ({ ok, fail }) => {
-      toast.success(`Synced ${ok} product${ok === 1 ? "" : "s"}${fail ? `, ${fail} failed` : ""}`);
+    onSuccess: ({ ok, fail, blocked }) => {
+      toast.success(
+        `Synced ${ok} product${ok === 1 ? "" : "s"}${fail ? `, ${fail} failed` : ""}${blocked ? `, ${blocked} skipped (demo limit)` : ""}`
+      );
       setSelected(new Set());
       productsQ.refetch();
     },
@@ -201,6 +212,13 @@ function SyncApp() {
     if (!chosen.length) {
       toast.error("Nothing selected");
       return;
+    }
+    if (demoRemaining === 0) {
+      toast.error("Demo limit reached. Upgrade to sync more products.");
+      return;
+    }
+    if (chosen.length > demoRemaining) {
+      toast.warning(`Demo allows ${demoRemaining} more sync${demoRemaining === 1 ? "" : "s"}. Extra products will be skipped.`);
     }
     syncMu.mutate(chosen);
   };
