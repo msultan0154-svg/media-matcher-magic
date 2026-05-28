@@ -227,11 +227,21 @@ function SyncApp() {
     <div className="min-h-screen bg-background">
       <Toaster position="top-right" />
       <div className="mx-auto max-w-6xl p-6 space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Filename SKU = text before the first space. All matching images are listed per product.
-          </p>
+        <header className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold">Dashboard</h1>
+            <p className="text-sm text-muted-foreground">
+              Filename SKU = text before the first space. All matching images are listed per product.
+            </p>
+          </div>
+          <div className={`rounded-lg border px-4 py-2 text-sm ${demoRemaining === 0 ? "border-destructive bg-destructive/10 text-destructive" : "bg-muted"}`}>
+            <div className="font-medium">Demo version</div>
+            <div className="text-xs">
+              {demoRemaining > 0
+                ? `${demoRemaining} of ${DEMO_LIMIT} product syncs remaining`
+                : "Limit reached — upgrade to continue"}
+            </div>
+          </div>
         </header>
 
         {productsQ.data && (
