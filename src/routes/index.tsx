@@ -98,12 +98,20 @@ function DriveThumb({ fileId, name, onRemove }: { fileId: string; name: string; 
   );
 }
 
+const DEMO_LIMIT = 5;
+const DEMO_KEY = "demo_synced_count";
+
 function SyncApp() {
   const [folderId, setFolderId] = useState("");
   const [search, setSearch] = useState("");
   const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [removed, setRemoved] = useState<Record<string, Set<string>>>({}); // productId -> set of fileIds removed
+  const [demoUsed, setDemoUsed] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return Number(localStorage.getItem(DEMO_KEY) ?? 0);
+  });
+  const demoRemaining = Math.max(0, DEMO_LIMIT - demoUsed);
 
   const fetchProducts = useServerFn(listProducts);
   const fetchDrive = useServerFn(listDriveImages);
